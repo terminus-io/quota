@@ -16,17 +16,21 @@ func printUsage() {
 	fmt.Println("  quota-tool <command> <path> [options]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  set     Set quota limits")
-	fmt.Println("  get     Get quota information for a specific ID")
-	fmt.Println("  list    List all quotas of a given type")
-	fmt.Println("  test-id Test if a specific ID has quota")
-	fmt.Println("  remove  Remove quota limits")
-	fmt.Println("  test    Run comprehensive tests")
-	fmt.Println("  detect  Detect filesystem type")
+	fmt.Println("  set          Set quota limits")
+	fmt.Println("  set-project  Set project ID for a path")
+	fmt.Println("  get          Get quota information for a specific ID")
+	fmt.Println("  list         List all quotas of a given type")
+	fmt.Println("  test-id      Test if a specific ID has quota")
+	fmt.Println("  remove       Remove quota limits")
+	fmt.Println("  test         Run comprehensive tests")
+	fmt.Println("  detect       Detect filesystem type")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  Detect filesystem:")
 	fmt.Println("    quota-tool detect /mnt/data")
+	fmt.Println()
+	fmt.Println("  Set project ID:")
+	fmt.Println("    quota-tool set-project /mnt/data 100")
 	fmt.Println()
 	fmt.Println("  Set quota:")
 	fmt.Println("    quota-tool set /mnt/data 1000 1048576 921600 100000 90000")
@@ -358,6 +362,22 @@ func detectFileSystem(path string) {
 	fmt.Printf("Filesystem: %s\n", fstype)
 }
 
+func setProjectID(path string, projectIDStr string) {
+	projectID, err := strconv.ParseUint(projectIDStr, 10, 32)
+	if err != nil {
+		log.Fatalf("Invalid project ID value: %v", err)
+	}
+
+	fmt.Printf("Setting project ID %d for path=%s\n", projectID, path)
+
+	err = quota.SetProjectID(path, int(projectID))
+	if err != nil {
+		log.Fatalf("Failed to set project ID: %v", err)
+	}
+
+	fmt.Println("✓ Project ID set successfully")
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -373,6 +393,13 @@ func main() {
 			os.Exit(1)
 		}
 		setQuota(os.Args[2], os.Args[3:])
+
+	case "set-project":
+		if len(os.Args) < 4 {
+			fmt.Println("Usage: quota-tool set-project <path> <project_id>")
+			os.Exit(1)
+		}
+		setProjectID(os.Args[2], os.Args[3])
 
 	case "get":
 		if len(os.Args) < 4 {
