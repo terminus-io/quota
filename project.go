@@ -53,7 +53,7 @@ func SetProjectIDExt4(path string, projectID int) error {
 
 // SetProjectID 设置文件或目录的project ID
 func SetProjectID(path string, projectID int) error {
-	fsType, err := GetFilesystemType(path)
+	fsType, err := DetectFileSystem(path)
 	if err != nil {
 		return err
 	}
