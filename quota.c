@@ -125,7 +125,7 @@ int xfs_get_quota(const char *path, uint32_t id, int type, XFSQuotaInfo *info) {
     return 0;
 }
 
-int xfs_list_quotas(const char *path, int type, XFSQuotaList *list, int max_id) {
+int xfs_list_quotas(const char *path, int type, XFSQuotaList *list, int max_id __attribute__((unused))) {
     if (!path || !list) {
         return EINVAL;
     }
