@@ -25,7 +25,10 @@ const char* project_error_string(int error_code) {
     if (error_code == 0) {
         return "Success";
     }
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-result"
     strerror_r(error_code, error_buffer, sizeof(error_buffer));
+#pragma GCC diagnostic pop
     return error_buffer;
 }
 
