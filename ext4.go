@@ -2,7 +2,7 @@ package quota
 
 /*
 #cgo CFLAGS: -Wall -Wextra -I${SRCDIR}/pkg/ext4
-#cgo LDFLAGS: ${SRCDIR}/pkg/ext4/quota_ext4.o
+#cgo LDFLAGS: ${SRCDIR}/pkg/ext4/quota_ext4.o ${SRCDIR}/pkg/ext4/quota_ext4_fast.o ${SRCDIR}/pkg/ext4/quota_ext4_direct.o
 #include <stdlib.h>
 #include "quota_ext4.h"
 */
@@ -38,7 +38,47 @@ func (m *EXT4Manager) GetQuota(path string, id uint32, qtype QuotaType) (*QuotaI
 }
 
 func (m *EXT4Manager) ListQuotas(path string, qtype QuotaType, maxID uint32) ([]QuotaInfo, error) {
-	infos, err := ext4ListQuotas(path, int(qtype), maxID)
+	infos, err := ext4ListQuotasDirect(path, int(qtype), maxID)
+	if err == nil {
+		result := make([]QuotaInfo, len(infos))
+		for i, info := range infos {
+			result[i] = QuotaInfo{
+				ID:             info.ID,
+				Type:           QuotaType(info.Type),
+				BlockHardLimit: info.BlockHardLimit,
+				BlockSoftLimit: info.BlockSoftLimit,
+				CurrentBlocks:  info.CurrentBlocks,
+				InodeHardLimit: info.InodeHardLimit,
+				InodeSoftLimit: info.InodeSoftLimit,
+				CurrentInodes:  info.CurrentInodes,
+				BlockTime:      info.BlockTime,
+				InodeTime:      info.InodeTime,
+			}
+		}
+		return result, nil
+	}
+
+	infos, err = ext4ListQuotasFast(path, int(qtype), maxID)
+	if err == nil {
+		result := make([]QuotaInfo, len(infos))
+		for i, info := range infos {
+			result[i] = QuotaInfo{
+				ID:             info.ID,
+				Type:           QuotaType(info.Type),
+				BlockHardLimit: info.BlockHardLimit,
+				BlockSoftLimit: info.BlockSoftLimit,
+				CurrentBlocks:  info.CurrentBlocks,
+				InodeHardLimit: info.InodeHardLimit,
+				InodeSoftLimit: info.InodeSoftLimit,
+				CurrentInodes:  info.CurrentInodes,
+				BlockTime:      info.BlockTime,
+				InodeTime:      info.InodeTime,
+			}
+		}
+		return result, nil
+	}
+
+	infos, err = ext4ListQuotas(path, int(qtype), maxID)
 	if err != nil {
 		return nil, err
 	}
@@ -152,8 +192,71 @@ func ext4ListQuotas(path string, qtype int, maxID uint32) ([]ext4QuotaInfo, erro
 			InodeTime:      uint64(item.itime),
 		}
 	}
-
 	return infos, nil
+}
+
+func ext4ListQuotasFast(path string, qtype int, maxID uint32) ([]ext4QuotaInfo, error) {
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+
+	var list C.EXT4QuotaList
+	ret := C.ext4_list_quotas_fast(cPath, C.int(qtype), &list, C.int(maxID))
+
+	if ret == 0 {
+		defer C.ext4_free_quota_list(&list)
+
+		infos := make([]ext4QuotaInfo, int(list.count))
+		for i := 0; i < int(list.count); i++ {
+			item := (*[1 << 28]C.EXT4QuotaInfo)(unsafe.Pointer(list.items))[i]
+			infos[i] = ext4QuotaInfo{
+				ID:             uint32(item.id),
+				Type:           int32(item.qtype),
+				BlockHardLimit: uint64(item.bhardlimit),
+				BlockSoftLimit: uint64(item.bsoftlimit),
+				CurrentBlocks:  uint64(item.curblocks),
+				InodeHardLimit: uint64(item.ihardlimit),
+				InodeSoftLimit: uint64(item.isoftlimit),
+				CurrentInodes:  uint64(item.curinodes),
+				BlockTime:      uint64(item.btime),
+				InodeTime:      uint64(item.itime),
+			}
+		}
+		return infos, nil
+	}
+
+	return nil, &QuotaError{Code: int(ret), Message: "Fast method not available"}
+}
+
+func ext4ListQuotasDirect(path string, qtype int, maxID uint32) ([]ext4QuotaInfo, error) {
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+
+	var list C.EXT4QuotaList
+	ret := C.ext4_list_quotas_direct(cPath, C.int(qtype), &list, C.int(maxID))
+
+	if ret == 0 {
+		defer C.ext4_free_quota_list(&list)
+
+		infos := make([]ext4QuotaInfo, int(list.count))
+		for i := 0; i < int(list.count); i++ {
+			item := (*[1 << 28]C.EXT4QuotaInfo)(unsafe.Pointer(list.items))[i]
+			infos[i] = ext4QuotaInfo{
+				ID:             uint32(item.id),
+				Type:           int32(item.qtype),
+				BlockHardLimit: uint64(item.bhardlimit),
+				BlockSoftLimit: uint64(item.bsoftlimit),
+				CurrentBlocks:  uint64(item.curblocks),
+				InodeHardLimit: uint64(item.ihardlimit),
+				InodeSoftLimit: uint64(item.isoftlimit),
+				CurrentInodes:  uint64(item.curinodes),
+				BlockTime:      uint64(item.btime),
+				InodeTime:      uint64(item.itime),
+			}
+		}
+		return infos, nil
+	}
+
+	return nil, &QuotaError{Code: int(ret), Message: "Direct method not available"}
 }
 
 func ext4RemoveQuota(path string, id uint32, qtype int) error {

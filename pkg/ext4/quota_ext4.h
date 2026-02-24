@@ -25,6 +25,7 @@ typedef struct {
 typedef struct {
     EXT4QuotaInfo *items;
     size_t count;
+    size_t capacity;
 } EXT4QuotaList;
 
 int ext4_set_quota(const char *path, uint32_t id, int type,
@@ -34,6 +35,12 @@ int ext4_set_quota(const char *path, uint32_t id, int type,
 int ext4_get_quota(const char *path, uint32_t id, int type, EXT4QuotaInfo *info);
 
 int ext4_list_quotas(const char *path, int type, EXT4QuotaList *list, int max_id);
+
+int ext4_list_quotas_direct(const char *path, int type, EXT4QuotaList *list, int max_id);
+
+int ext4_list_quotas_direct_debug(const char *path, int type, EXT4QuotaList *list, int max_id, char *error_msg, size_t error_msg_size);
+
+int ext4_list_quotas_fast(const char *path, int type, EXT4QuotaList *list, int max_id);
 
 void ext4_free_quota_list(EXT4QuotaList *list);
 

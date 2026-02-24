@@ -135,7 +135,7 @@ int xfs_list_quotas(const char *path, int type, XFSQuotaList *list, int max_id) 
     }
 
     list->count = 0;
-    list->capacity = max_id > 0 ? max_id : 65536;
+    list->capacity = 1024;
     list->items = (XFSQuotaInfo *)calloc(list->capacity, sizeof(XFSQuotaInfo));
     
     if (!list->items) {
@@ -143,19 +143,38 @@ int xfs_list_quotas(const char *path, int type, XFSQuotaList *list, int max_id) 
     }
 
     int found = 0;
+    uint32_t next_id = 0;
     
-    for (uint32_t id = 0; id < (uint32_t)list->capacity && found < list->capacity; id++) {
+    while (found < 100000) {
         struct fs_disk_quota dq;
         memset(&dq, 0, sizeof(dq));
 
-        int ret = quotactl(QCMD(Q_XGETQUOTA, type), device_path, id, (caddr_t)&dq);
+        int ret = quotactl(QCMD(Q_XGETNEXTQUOTA, type), device_path, next_id, (caddr_t)&dq);
         
         if (ret < 0) {
+            break;
+        }
+
+        if (dq.d_blk_hardlimit == 0 && dq.d_blk_softlimit == 0 &&
+            dq.d_ino_hardlimit == 0 && dq.d_ino_softlimit == 0 &&
+            dq.d_bcount == 0 && dq.d_icount == 0) {
+            next_id = dq.d_id + 1;
             continue;
         }
 
+        if (found >= list->capacity) {
+            list->capacity *= 2;
+            XFSQuotaInfo *new_items = (XFSQuotaInfo *)realloc(list->items, list->capacity * sizeof(XFSQuotaInfo));
+            if (!new_items) {
+                free(list->items);
+                list->items = NULL;
+                return ENOMEM;
+            }
+            list->items = new_items;
+        }
+
         XFSQuotaInfo *info = &list->items[found];
-        info->id = id;
+        info->id = dq.d_id;
         info->qtype = type;
         info->bhardlimit = dq.d_blk_hardlimit / 2;
         info->bsoftlimit = dq.d_blk_softlimit / 2;
@@ -166,6 +185,7 @@ int xfs_list_quotas(const char *path, int type, XFSQuotaList *list, int max_id) 
         info->btime = dq.d_btimer;
         info->itime = dq.d_itimer;
         
+        next_id = dq.d_id + 1;
         found++;
     }
 

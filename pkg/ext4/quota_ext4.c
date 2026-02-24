@@ -10,9 +10,41 @@
 #include <linux/quota.h>
 #include <sys/quota.h>
 #include <limits.h>
+#include <sys/utsname.h>
 #include "quota_ext4.h"
 
 static char device_path[PATH_MAX] = {0};
+static int kernel_version_checked = 0;
+static int kernel_supports_getnextquota = 0;
+
+static int check_kernel_version(void) {
+    if (kernel_version_checked) {
+        return kernel_supports_getnextquota;
+    }
+
+    struct utsname uts;
+    if (uname(&uts) != 0) {
+        kernel_version_checked = 1;
+        kernel_supports_getnextquota = 0;
+        return 0;
+    }
+
+    int major, minor, patch;
+    if (sscanf(uts.release, "%d.%d.%d", &major, &minor, &patch) != 3) {
+        kernel_version_checked = 1;
+        kernel_supports_getnextquota = 0;
+        return 0;
+    }
+
+    kernel_version_checked = 1;
+    if (major > 4 || (major == 4 && minor >= 6)) {
+        kernel_supports_getnextquota = 1;
+    } else {
+        kernel_supports_getnextquota = 0;
+    }
+
+    return kernel_supports_getnextquota;
+}
 
 static int find_device_for_path(const char *path) {
     FILE *fp = setmntent("/proc/mounts", "r");
@@ -128,7 +160,8 @@ int ext4_get_quota(const char *path, uint32_t id, int type, EXT4QuotaInfo *info)
 
 static int has_quota_set(const struct if_dqblk *dq) {
     return (dq->dqb_bhardlimit > 0 || dq->dqb_bsoftlimit > 0 ||
-            dq->dqb_ihardlimit > 0 || dq->dqb_isoftlimit > 0);
+            dq->dqb_ihardlimit > 0 || dq->dqb_isoftlimit > 0 ||
+            dq->dqb_curspace > 0 || dq->dqb_curinodes > 0);
 }
 
 int ext4_list_quotas(const char *path, int type, EXT4QuotaList *list, int max_id) {
@@ -149,42 +182,151 @@ int ext4_list_quotas(const char *path, int type, EXT4QuotaList *list, int max_id
         return ENOMEM;
     }
 
-    for (uint32_t id = 0; id <= (uint32_t)max_id; id++) {
-        struct if_dqblk dq;
-        memset(&dq, 0, sizeof(dq));
-
-        int ret = quotactl(QCMD(Q_GETQUOTA, type), device_path, id, (caddr_t)&dq);
-
-        if (ret < 0) {
-            continue;
+    int use_nextquota = 0;
+    if (check_kernel_version()) {
+        struct if_nextdqblk test_dq;
+        memset(&test_dq, 0, sizeof(test_dq));
+        int test_ret = quotactl(QCMD(Q_GETNEXTQUOTA, type), device_path, 0, (caddr_t)&test_dq);
+        if (test_ret >= 0) {
+            use_nextquota = 1;
         }
-
-        if (!has_quota_set(&dq)) {
-        continue;
     }
 
-    EXT4QuotaInfo info;
-    info.id = id;
-    info.qtype = type;
-    info.bhardlimit = dq.dqb_bhardlimit;
-    info.bsoftlimit = dq.dqb_bsoftlimit;
-    info.curblocks = dq.dqb_curspace / 1024;
-    info.ihardlimit = dq.dqb_ihardlimit;
-    info.isoftlimit = dq.dqb_isoftlimit;
-    info.curinodes = dq.dqb_curinodes;
-    info.btime = dq.dqb_btime;
-    info.itime = dq.dqb_itime;
+    if (use_nextquota) {
+        uint32_t next_id = 0;
+        while (next_id <= (uint32_t)max_id && count < 100000) {
+            struct if_nextdqblk dq;
+            memset(&dq, 0, sizeof(dq));
 
-    if (count >= capacity) {
-        capacity *= 2;
-        EXT4QuotaInfo *new_items = (EXT4QuotaInfo *)realloc(items, capacity * sizeof(EXT4QuotaInfo));
-        if (!new_items) {
-            free(items);
-            return ENOMEM;
+            int ret = quotactl(QCMD(Q_GETNEXTQUOTA, type), device_path, next_id, (caddr_t)&dq);
+
+            if (ret < 0) {
+                break;
+            }
+
+            if (!has_quota_set((struct if_dqblk *)&dq)) {
+                next_id = dq.dqb_id + 1;
+                continue;
+            }
+
+            EXT4QuotaInfo info;
+            info.id = dq.dqb_id;
+            info.qtype = type;
+            info.bhardlimit = dq.dqb_bhardlimit;
+            info.bsoftlimit = dq.dqb_bsoftlimit;
+            info.curblocks = dq.dqb_curspace / 1024;
+            info.ihardlimit = dq.dqb_ihardlimit;
+            info.isoftlimit = dq.dqb_isoftlimit;
+            info.curinodes = dq.dqb_curinodes;
+            info.btime = dq.dqb_btime;
+            info.itime = dq.dqb_itime;
+
+            if (count >= capacity) {
+                capacity *= 2;
+                EXT4QuotaInfo *new_items = (EXT4QuotaInfo *)realloc(items, capacity * sizeof(EXT4QuotaInfo));
+                if (!new_items) {
+                    free(items);
+                    return ENOMEM;
+                }
+                items = new_items;
+            }
+            items[count++] = info;
+            next_id = dq.dqb_id + 1;
         }
-        items = new_items;
-    }
-    items[count++] = info;
+    } else {
+        uint32_t scan_limit = (max_id > 0) ? (uint32_t)max_id : 65536;
+        uint32_t step = 1;
+        
+        if (scan_limit > 10000000) {
+            step = 100000;
+        } else if (scan_limit > 1000000) {
+            step = 10000;
+        } else if (scan_limit > 100000) {
+            step = 1000;
+        } else if (scan_limit > 10000) {
+            step = 100;
+        } else if (scan_limit > 1000) {
+            step = 10;
+        }
+        
+        int consecutive_errors = 0;
+        const int max_consecutive_errors = 1000;
+        
+        for (uint32_t id = 0; id <= scan_limit; id += step) {
+            struct if_dqblk dq;
+            memset(&dq, 0, sizeof(dq));
+
+            int ret = quotactl(QCMD(Q_GETQUOTA, type), device_path, id, (caddr_t)&dq);
+
+            if (ret < 0) {
+                consecutive_errors++;
+                if (consecutive_errors >= max_consecutive_errors) {
+                    break;
+                }
+                continue;
+            }
+
+            consecutive_errors = 0;
+
+            if (!has_quota_set(&dq)) {
+                continue;
+            }
+
+            EXT4QuotaInfo info;
+            info.id = id;
+            info.qtype = type;
+            info.bhardlimit = dq.dqb_bhardlimit;
+            info.bsoftlimit = dq.dqb_bsoftlimit;
+            info.curblocks = dq.dqb_curspace / 1024;
+            info.ihardlimit = dq.dqb_ihardlimit;
+            info.isoftlimit = dq.dqb_isoftlimit;
+            info.curinodes = dq.dqb_curinodes;
+            info.btime = dq.dqb_btime;
+            info.itime = dq.dqb_itime;
+
+            if (count >= capacity) {
+                capacity *= 2;
+                EXT4QuotaInfo *new_items = (EXT4QuotaInfo *)realloc(items, capacity * sizeof(EXT4QuotaInfo));
+                if (!new_items) {
+                    free(items);
+                    return ENOMEM;
+                }
+                items = new_items;
+            }
+            items[count++] = info;
+            
+            if (step > 1) {
+                for (uint32_t check_id = id + 1; check_id < id + step && check_id <= scan_limit; check_id++) {
+                    struct if_dqblk check_dq;
+                    memset(&check_dq, 0, sizeof(check_dq));
+                    int check_ret = quotactl(QCMD(Q_GETQUOTA, type), device_path, check_id, (caddr_t)&check_dq);
+                    if (check_ret >= 0 && has_quota_set(&check_dq)) {
+                        EXT4QuotaInfo check_info;
+                        check_info.id = check_id;
+                        check_info.qtype = type;
+                        check_info.bhardlimit = check_dq.dqb_bhardlimit;
+                        check_info.bsoftlimit = check_dq.dqb_bsoftlimit;
+                        check_info.curblocks = check_dq.dqb_curspace / 1024;
+                        check_info.ihardlimit = check_dq.dqb_ihardlimit;
+                        check_info.isoftlimit = check_dq.dqb_isoftlimit;
+                        check_info.curinodes = check_dq.dqb_curinodes;
+                        check_info.btime = check_dq.dqb_btime;
+                        check_info.itime = check_dq.dqb_itime;
+
+                        if (count >= capacity) {
+                            capacity *= 2;
+                            EXT4QuotaInfo *new_items = (EXT4QuotaInfo *)realloc(items, capacity * sizeof(EXT4QuotaInfo));
+                            if (!new_items) {
+                                free(items);
+                                return ENOMEM;
+                            }
+                            items = new_items;
+                        }
+                        items[count++] = check_info;
+                    }
+                }
+            }
+        }
     }
 
     list->items = items;

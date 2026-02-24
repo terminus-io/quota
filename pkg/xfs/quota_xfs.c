@@ -9,11 +9,22 @@
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <linux/dqblk_xfs.h>
+#include <sys/utsname.h>
 #include <mntent.h>
 #include <limits.h>
 #include "quota_xfs.h"
 
 static char device_path[PATH_MAX] = {0};
+static int kernel_supports_getnextquota = -1;
+
+static int check_kernel_version(void) {
+    if (kernel_supports_getnextquota != -1) {
+        return kernel_supports_getnextquota;
+    }
+
+    kernel_supports_getnextquota = 1;
+    return 1;
+}
 
 static int find_device_for_path(const char *path) {
     FILE *fp = setmntent("/proc/mounts", "r");
@@ -127,7 +138,8 @@ int xfs_get_quota(const char *path, uint32_t id, int type, XFSQuotaInfo *info) {
 
 static int has_quota_set(const struct fs_disk_quota *dq) {
     return (dq->d_blk_hardlimit > 0 || dq->d_blk_softlimit > 0 ||
-            dq->d_ino_hardlimit > 0 || dq->d_ino_softlimit > 0);
+            dq->d_ino_hardlimit > 0 || dq->d_ino_softlimit > 0 ||
+            dq->d_bcount > 0 || dq->d_icount > 0);
 }
 
 int xfs_list_quotas(const char *path, int type, XFSQuotaList *list, int max_id) {
@@ -140,7 +152,7 @@ int xfs_list_quotas(const char *path, int type, XFSQuotaList *list, int max_id) 
     }
 
     list->count = 0;
-    list->capacity = max_id > 0 ? max_id : 65536;
+    list->capacity = 1024;
     list->items = (XFSQuotaInfo *)calloc(list->capacity, sizeof(XFSQuotaInfo));
     
     if (!list->items) {
@@ -148,23 +160,36 @@ int xfs_list_quotas(const char *path, int type, XFSQuotaList *list, int max_id) 
     }
 
     int found = 0;
+    uint32_t next_id = 0;
     
-    for (uint32_t id = 0; id < (uint32_t)list->capacity && found < list->capacity; id++) {
+    while (found < 100000) {
         struct fs_disk_quota dq;
         memset(&dq, 0, sizeof(dq));
 
-        int ret = quotactl(QCMD(Q_XGETQUOTA, type), device_path, id, (caddr_t)&dq);
+        int ret = quotactl(QCMD(Q_XGETNEXTQUOTA, type), device_path, next_id, (caddr_t)&dq);
         
         if (ret < 0) {
-            continue;
+            break;
         }
 
         if (!has_quota_set(&dq)) {
+            next_id = dq.d_id + 1;
             continue;
         }
 
+        if (found >= list->capacity) {
+            list->capacity *= 2;
+            XFSQuotaInfo *new_items = (XFSQuotaInfo *)realloc(list->items, list->capacity * sizeof(XFSQuotaInfo));
+            if (!new_items) {
+                free(list->items);
+                list->items = NULL;
+                return ENOMEM;
+            }
+            list->items = new_items;
+        }
+
         XFSQuotaInfo *info = &list->items[found];
-        info->id = id;
+        info->id = dq.d_id;
         info->qtype = type;
         info->bhardlimit = dq.d_blk_hardlimit / 2;
         info->bsoftlimit = dq.d_blk_softlimit / 2;
@@ -175,6 +200,7 @@ int xfs_list_quotas(const char *path, int type, XFSQuotaList *list, int max_id) 
         info->btime = dq.d_btimer;
         info->itime = dq.d_itimer;
         
+        next_id = dq.d_id + 1;
         found++;
     }
 
