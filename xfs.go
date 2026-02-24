@@ -2,12 +2,133 @@ package quota
 
 /*
 #cgo CFLAGS: -Wall -Wextra
+#define _GNU_SOURCE
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <linux/fs.h>
+#include <linux/fsmap.h>
+#include <mntent.h>
+#include <limits.h>
+#include <stdint.h>
 #include "pkg/xfs/quota_xfs.h"
+
+static char error_buffer[256];
+
+const char* project_error_string(int error_code) {
+    if (error_code == 0) {
+        return "Success";
+    }
+    strerror_r(error_code, error_buffer, sizeof(error_buffer));
+    return error_buffer;
+}
+
+int set_project_id_xfs(const char *path, uint32_t project_id) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return errno;
+    }
+
+    struct fsxattr attr;
+    memset(&attr, 0, sizeof(attr));
+
+    if (ioctl(fd, FS_IOC_FSGETXATTR, &attr) < 0) {
+        close(fd);
+        return errno;
+    }
+
+    attr.fsx_projid = project_id;
+    attr.fsx_xflags |= FS_XFLAG_PROJINHERIT;
+
+    if (ioctl(fd, FS_IOC_FSSETXATTR, &attr) < 0) {
+        close(fd);
+        return errno;
+    }
+
+    close(fd);
+    return 0;
+}
+
+int set_project_id_ext4(const char *path, uint32_t project_id) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return errno;
+    }
+
+    struct fsxattr attr;
+    memset(&attr, 0, sizeof(attr));
+
+    if (ioctl(fd, FS_IOC_FSGETXATTR, &attr) < 0) {
+        close(fd);
+        return errno;
+    }
+
+    attr.fsx_projid = project_id;
+    attr.fsx_xflags |= FS_XFLAG_PROJINHERIT;
+
+    if (ioctl(fd, FS_IOC_FSSETXATTR, &attr) < 0) {
+        close(fd);
+        return errno;
+    }
+
+    close(fd);
+    return 0;
+}
+
+int get_project_id(const char *path, uint32_t *project_id) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return errno;
+    }
+
+    struct fsxattr attr;
+    memset(&attr, 0, sizeof(attr));
+
+    if (ioctl(fd, FS_IOC_FSGETXATTR, &attr) < 0) {
+        close(fd);
+        return errno;
+    }
+
+    *project_id = attr.fsx_projid;
+    close(fd);
+    return 0;
+}
+
+int clear_project_id(const char *path) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return errno;
+    }
+
+    struct fsxattr attr;
+    memset(&attr, 0, sizeof(attr));
+
+    if (ioctl(fd, FS_IOC_FSGETXATTR, &attr) < 0) {
+        close(fd);
+        return errno;
+    }
+
+    attr.fsx_projid = 0;
+
+    if (ioctl(fd, FS_IOC_FSSETXATTR, &attr) < 0) {
+        close(fd);
+        return errno;
+    }
+
+    close(fd);
+    return 0;
+}
 */
 import "C"
 
 import (
+	"fmt"
 	"unsafe"
 )
 
@@ -180,5 +301,58 @@ func xfsTestQuota(path string, id uint32, qtype int) error {
 		return &QuotaError{Code: int(ret), Message: errMsg}
 	}
 
+	return nil
+}
+
+// setProjectIDXFS 在XFS文件系统上设置project ID（使用ioctl系统调用）
+func setProjectIDXFS(path string, projectID int) error {
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+
+	ret := C.set_project_id_xfs(cPath, C.uint32_t(projectID))
+	if ret != 0 {
+		errMsg := C.GoString(C.project_error_string(C.int(ret)))
+		return fmt.Errorf("XFS设置失败: %s", errMsg)
+	}
+	return nil
+}
+
+// setProjectIDExt4 在ext4文件系统上设置project ID（使用ioctl系统调用）
+func setProjectIDExt4(path string, projectID int) error {
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+
+	ret := C.set_project_id_ext4(cPath, C.uint32_t(projectID))
+	if ret != 0 {
+		errMsg := C.GoString(C.project_error_string(C.int(ret)))
+		return fmt.Errorf("ext4设置失败: %s", errMsg)
+	}
+	return nil
+}
+
+// getProjectID 获取文件或目录的project ID（使用ioctl系统调用）
+func getProjectID(path string) (int, error) {
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+
+	var projectID C.uint32_t
+	ret := C.get_project_id(cPath, &projectID)
+	if ret != 0 {
+		errMsg := C.GoString(C.project_error_string(C.int(ret)))
+		return 0, fmt.Errorf("获取project ID失败: %s", errMsg)
+	}
+	return int(projectID), nil
+}
+
+// clearProjectID 清除文件或目录的project ID（使用ioctl系统调用）
+func clearProjectID(path string) error {
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+
+	ret := C.clear_project_id(cPath)
+	if ret != 0 {
+		errMsg := C.GoString(C.project_error_string(C.int(ret)))
+		return fmt.Errorf("清除project ID失败: %s", errMsg)
+	}
 	return nil
 }
