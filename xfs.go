@@ -2,6 +2,7 @@ package quota
 
 /*
 #cgo CFLAGS: -Wall -Wextra
+#cgo LDFLAGS: ${SRCDIR}/pkg/xfs/quota_xfs.o
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>

@@ -10,6 +10,14 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# 编译 XFS C 源文件
+echo "Compiling XFS C sources..."
+gcc -c -Wall -Wextra -I. pkg/xfs/quota_xfs.c -o pkg/xfs/quota_xfs.o
+if [ $? -ne 0 ]; then
+    echo "Failed to compile XFS C sources"
+    exit 1
+fi
+
 # 构建统一的 Go 二进制文件
 echo "Building unified Go binary..."
 CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
