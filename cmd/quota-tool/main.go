@@ -370,7 +370,7 @@ func setProjectID(path string, projectIDStr string) {
 
 	fmt.Printf("Setting project ID %d for path=%s\n", projectID, path)
 
-	err = quota.SetProjectID(path, int(projectID))
+	err = quota.SetProjectIDRecursive(path, int(projectID))
 	if err != nil {
 		log.Fatalf("Failed to set project ID: %v", err)
 	}
